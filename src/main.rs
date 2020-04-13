@@ -10,7 +10,7 @@ extern crate panic_halt; // you can put a breakpoint on `rust_begin_unwind` to c
 //use cortex_m::asm;
 use cortex_m_rt::entry;
 use stm32f4::stm32f401;
-//use cortex_m_semihosting::dbg;
+use cortex_m_semihosting::dbg;
 
 #[entry]
 fn main() -> ! {
@@ -19,44 +19,76 @@ fn main() -> ! {
     init_clock(&device);
     gpio_setup(&device);
     spi1_setup(&device);
+    init_mat_led(&device);
 
-    device.GPIOA.bsrr.write(|w| w.bs1().set());
-    // Matrix LED 初期設定
-    spi_enable(&device);
-    let init_pat = [0x0F00u16,  // テストモード解除
-                    0x0900u16,  // BCDデコードバイパス 
-                    0x0A0Au16,  // 輝度制御　下位4bit MAX:F
-                    0x0B07u16,  // スキャン桁指定 下位4bit MAX:7
-                    0x0C01u16,  // シャットダウンモード　解除
-                    0x0101u16,  // 桁0に00001111
-                    0x0202u16,  // 桁1に00001111
-                    0x0303u16,  // 桁2に00001111
-                    0x0404u16,  // 桁3に00001111
-                    0x0505u16,  // 桁4に00001111
-                    0x0606u16,  // 桁5に00001111
-                    0x0707u16,  // 桁6に00001111
-                    0x080Fu16,  // 桁7に00001111
-    ];
+    //device.GPIOA.bsrr.write(|w| w.bs1().set());
     device.GPIOA.bsrr.write(|w| w.bs10().set());
-    for pat in &init_pat {
-        //dbg!(*pat);
-        spi_send_word(&device, 0x0C00u16);
-        spi_send_word(&device, 0x0C00u16);
-        spi_send_word(&device, 0x0C00u16);
-        spi_send_word(&device, *pat);
-        led_matrix_data_enter(&device);
-    }
+    //device.GPIOA.bsrr.write(|w| w.bs11().set());
 
+    send_oneline_mat_led(&device, 0, 0b00111000_01100000_00000000_00000010);
+    send_oneline_mat_led(&device, 1, 0b01000100_10010000_00000000_00010101);
+    send_oneline_mat_led(&device, 2, 0b10000011_00001000_00000000_00101010);
+    send_oneline_mat_led(&device, 3, 0b01000000_00010000_00000000_00010000);
+    send_oneline_mat_led(&device, 4, 0b00100000_00100000_01000101_00010000);
+    send_oneline_mat_led(&device, 5, 0b00010000_01000000_01000101_00010000);
+    send_oneline_mat_led(&device, 6, 0b00001000_10000000_00101000_10100000);
+    send_oneline_mat_led(&device, 7, 0b00000111_00000000_00010000_01000000);
+    /*
+    send_oneline_mat_led(&device, 0, 0x5555AAAA);
+    send_oneline_mat_led(&device, 1, 0xAAAA5555);
+    send_oneline_mat_led(&device, 2, 0x5555AAAA);
+    send_oneline_mat_led(&device, 3, 0xAAAA5555);
+    send_oneline_mat_led(&device, 4, 0x5555AAAA);
+    send_oneline_mat_led(&device, 5, 0xAAAA5555);
+    send_oneline_mat_led(&device, 6, 0x5555AAAA);
+    send_oneline_mat_led(&device, 7, 0xAAAA5555);
     device.GPIOA.bsrr.write(|w| w.bs11().set());
+    */
 
     loop {
         // your code goes here
     }
 }
 
-/// spi通信有効にセット
-fn spi_enable(device : &stm32f401::Peripherals) {
-    device.SPI1.cr1.modify(|_,w| w.spe().enabled());
+/// Matrix LED に一行を送る
+/// # 引数
+///     line_num:   一番上が0。一番下が7
+///     pat:        パターン。一番左が最上位ビット
+fn send_oneline_mat_led(device: &stm32f401::Peripherals, line_num: u32, pat: u32) {
+    let digi_code :u16 = ((line_num+1)<<8) as u16;
+    let dat :[u16; 4] = [   digi_code | (((pat>>24)&0x00FF) as u16),
+                            digi_code | (((pat>>16)&0x00FF) as u16),
+                            digi_code | (((pat>>08)&0x00FF) as u16),
+                            digi_code | (((pat)&0x00FF) as u16),
+                        ];
+    spi_enable(&device);
+    device.GPIOA.bsrr.write(|w| w.br4().reset());
+    for d in &dat {
+        spi_send_word(&device, *d);
+    }
+    mat_led_data_enter(&device);
+    spi_disable(&device);
+}
+                
+/// Matrix LED 初期化
+fn init_mat_led(device: &stm32f401::Peripherals) {
+    const INIT_PAT: [u16; 5] = [0x0F00,  // テストモード解除
+                                0x0900,  // BCDデコードバイパス 
+                                0x0A08,  // 輝度制御　下位4bit MAX:F
+                                0x0B07,  // スキャン桁指定 下位4bit MAX:7
+                                0x0C01,  // シャットダウンモード　解除
+                               ];
+    device.GPIOA.bsrr.write(|w| w.bs1().set());
+
+    for pat in &INIT_PAT {
+        spi_enable(&device);
+        device.GPIOA.bsrr.write(|w| w.br4().reset());
+        for _x in 0..5 {
+            spi_send_word(&device, *pat);
+        }
+        mat_led_data_enter(&device);
+        spi_disable(&device);
+    }
 }
 
 /// SPI1 16ビットのデータを送信する。
@@ -69,7 +101,7 @@ fn spi_send_word(device: &stm32f401::Peripherals, data: u16) {
 }
 
 /// LEDへのデータ通信を確定する
-fn led_matrix_data_enter(device : &stm32f401::Peripherals) {
+fn mat_led_data_enter(device : &stm32f401::Peripherals) {
     while device.SPI1.sr.read().txe().is_not_empty() {
         cortex_m::asm::nop();
     }
@@ -77,12 +109,29 @@ fn led_matrix_data_enter(device : &stm32f401::Peripherals) {
         cortex_m::asm::nop(); // wait
     } 
     device.GPIOA.bsrr.write(|w| w.bs4().set());
-    for _x in 0..1_000 { // 最低50nsウェイト　48MHzクロックで3クロック
+    for _x in 0..100 { // 最低50nsウェイト　48MHzクロックで3クロック
         cortex_m::asm::nop();
     }
-    device.GPIOA.bsrr.write(|w| w.br4().reset());
+    
+    device.GPIOA.bsrr.write(|w| w.br1().reset());
 }
 
+/// spi通信有効にセット
+fn spi_enable(device : &stm32f401::Peripherals) {
+    device.GPIOA.bsrr.write(|w| w.br4().reset());
+    device.SPI1.cr1.modify(|_,w| w.spe().enabled());
+}
+
+/// spi通信無効にセット
+fn spi_disable(device: &stm32f401::Peripherals) {
+    while device.SPI1.sr.read().txe().is_not_empty() {
+        cortex_m::asm::nop();
+    }
+    while device.SPI1.sr.read().bsy().is_busy() { 
+        cortex_m::asm::nop(); // wait
+    } 
+    device.SPI1.cr1.modify(|_,w| w.spe().disabled()); 
+}
 
 /// システムクロックの初期設定
 /// 　クロック周波数　48MHz
@@ -110,6 +159,9 @@ fn init_clock(device : &stm32f401::Peripherals) {
     // システムクロックをPLLに切り替え
     device.RCC.cfgr.modify(|_,w| w.sw().pll());
     while !device.RCC.cfgr.read().sws().is_pll() { /*wait*/ }
+
+    // APB2のクロックを1/16
+    //device.RCC.cfgr.modify(|_,w| w.ppre2().div2());
 }
 
 /// gpioのセットアップ
@@ -126,12 +178,15 @@ fn gpio_setup(device : &stm32f401::Peripherals) {
     // SPI端子割付け
     gpioa.moder.modify(|_,w| w.moder7().alternate()); // SPI1_MOSI
     gpioa.afrl.modify(|_,w| w.afrl7().af5());
-    gpioa.otyper.modify(|_,w| w.ot7().open_drain()); 
+    gpioa.ospeedr.modify(|_,w| w.ospeedr7().very_high_speed());
+    gpioa.otyper.modify(|_,w| w.ot7().push_pull()); 
     gpioa.moder.modify(|_,w| w.moder5().alternate()); // SPI1_CLK
     gpioa.afrl.modify(|_,w| w.afrl5().af5());
-    gpioa.otyper.modify(|_,w| w.ot5().open_drain());
+    gpioa.ospeedr.modify(|_,w| w.ospeedr5().very_high_speed());
+    gpioa.otyper.modify(|_,w| w.ot5().push_pull());
     gpioa.moder.modify(|_,w| w.moder4().output());   // NSS(CS)
-    gpioa.otyper.modify(|_,w| w.ot4().open_drain());
+    gpioa.ospeedr.modify(|_,w| w.ospeedr4().very_high_speed());
+    gpioa.otyper.modify(|_,w| w.ot4().push_pull());
 }
 
 /// SPIのセットアップ
@@ -143,9 +198,12 @@ fn spi1_setup(device : &stm32f401::Peripherals) {
     spi1.cr1.modify(|_,w| w.bidimode().unidirectional());
     spi1.cr1.modify(|_,w| w.dff().sixteen_bit());
     spi1.cr1.modify(|_,w| w.lsbfirst().msbfirst());
-    spi1.cr1.modify(|_,w| w.br().div256()); // 187kHz
+    spi1.cr1.modify(|_,w| w.br().div4()); // 基準クロックは48MHz
     spi1.cr1.modify(|_,w| w.mstr().master());
-    spi1.cr1.modify(|_,w| w.cpha().second_edge());
+//    spi1.cr1.modify(|_,w| w.cpol().idle_high());
+    spi1.cr1.modify(|_,w| w.cpol().idle_low());
+    spi1.cr1.modify(|_,w| w.cpha().first_edge());
+//    spi1.cr1.modify(|_,w| w.cpha().second_edge());
     spi1.cr1.modify(|_,w| w.ssm().enabled());
     spi1.cr1.modify(|_,w| w.ssi().slave_not_selected());
 }
