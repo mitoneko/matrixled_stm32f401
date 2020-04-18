@@ -28,6 +28,9 @@ panic-halt = "0.2.0"
 version = "0.10.0"
 features = ["stm32f401", "rt"]
 
+[dependencies.misakifont]
+path = "../misakifont/misakifont"
+
 # this lets you use `cargo fix`!
 [[bin]]
 name = "matrixled"

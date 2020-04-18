@@ -10,7 +10,9 @@ extern crate panic_halt; // you can put a breakpoint on `rust_begin_unwind` to c
 //use cortex_m::asm;
 use cortex_m_rt::entry;
 use stm32f4::stm32f401;
-use cortex_m_semihosting::dbg;
+//use cortex_m_semihosting::dbg;
+
+use misakifont::font88::FONT88;
 
 #[entry]
 fn main() -> ! {
@@ -25,25 +27,24 @@ fn main() -> ! {
     device.GPIOA.bsrr.write(|w| w.bs10().set());
     //device.GPIOA.bsrr.write(|w| w.bs11().set());
 
-    send_oneline_mat_led(&device, 0, 0b00111000_01100000_00000000_00000010);
-    send_oneline_mat_led(&device, 1, 0b01000100_10010000_00000000_00010101);
-    send_oneline_mat_led(&device, 2, 0b10000011_00001000_00000000_00101010);
-    send_oneline_mat_led(&device, 3, 0b01000000_00010000_00000000_00010000);
-    send_oneline_mat_led(&device, 4, 0b00100000_00100000_01000101_00010000);
-    send_oneline_mat_led(&device, 5, 0b00010000_01000000_01000101_00010000);
-    send_oneline_mat_led(&device, 6, 0b00001000_10000000_00101000_10100000);
-    send_oneline_mat_led(&device, 7, 0b00000111_00000000_00010000_01000000);
-    /*
-    send_oneline_mat_led(&device, 0, 0x5555AAAA);
-    send_oneline_mat_led(&device, 1, 0xAAAA5555);
-    send_oneline_mat_led(&device, 2, 0x5555AAAA);
-    send_oneline_mat_led(&device, 3, 0xAAAA5555);
-    send_oneline_mat_led(&device, 4, 0x5555AAAA);
-    send_oneline_mat_led(&device, 5, 0xAAAA5555);
-    send_oneline_mat_led(&device, 6, 0x5555AAAA);
-    send_oneline_mat_led(&device, 7, 0xAAAA5555);
+    let mut video = [0u32; 8];
+    //let font = FONT48.get_char(0x52);
+    let chars=[0xc3,0xdd,0xb2,0xd6,0xcd,0xa5,0xbb,0xd2];
+    let mut x = 24;
+    for c in 0..4 {
+        let font = FONT88.get_char(chars[c*2],chars[c*2+1]);
+        for i in 0..8 {
+            video[i] |= ( font[i] as u32) << x ;
+        }
+        x -= 8;
+    }
+    for i in 0..8 {
+        send_oneline_mat_led(&device, i, video[i as usize]);
+    }
+
+
+
     device.GPIOA.bsrr.write(|w| w.bs11().set());
-    */
 
     loop {
         // your code goes here
@@ -74,7 +75,7 @@ fn send_oneline_mat_led(device: &stm32f401::Peripherals, line_num: u32, pat: u32
 fn init_mat_led(device: &stm32f401::Peripherals) {
     const INIT_PAT: [u16; 5] = [0x0F00,  // テストモード解除
                                 0x0900,  // BCDデコードバイパス 
-                                0x0A08,  // 輝度制御　下位4bit MAX:F
+                                0x0A03,  // 輝度制御　下位4bit MAX:F
                                 0x0B07,  // スキャン桁指定 下位4bit MAX:7
                                 0x0C01,  // シャットダウンモード　解除
                                ];
