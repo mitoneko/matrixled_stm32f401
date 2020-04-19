@@ -14,6 +14,9 @@ use stm32f4::stm32f401;
 use misakifont::font88::FONT88;
 use matrixled::matrix_led;
 
+const START_TIME:u16 = 1500u16;
+const CONTICUE_TIME:u16 = 200u16;
+
 #[entry]
 fn main() -> ! {
     let device = stm32f401::Peripherals::take().unwrap();
@@ -21,6 +24,7 @@ fn main() -> ! {
     init_clock(&device);
     gpio_setup(&device);
     spi1_setup(&device);
+    tim11_setup(&device);
 
     device.GPIOA.bsrr.write(|w| w.bs1().set());
 
@@ -29,25 +33,54 @@ fn main() -> ! {
     device.GPIOA.bsrr.write(|w| w.bs10().set());
     //device.GPIOA.bsrr.write(|w| w.bs11().set());
 
-    //let font = FONT48.get_char(0x52);
-    let chars=[0xc5,0xda,0xb0,0xe6,0xcd,0xa5,0xbb,0xd2];
-    for c in 0..4 {
-        let font = FONT88.get_char(chars[c*2],chars[c*2+1]);
-        matrix.draw_bitmap((c as i32)*8, 0, 8, font);
-    }
-    matrix.flash_led();
-
-
+    let chars=[
+                0xa4,0xb3,0xa4,0xf3,0xa4,0xcb,0xa4,0xc1,0xa4,0xcf,0xa1,0xa2,
+                0xb9,0xa5,0xb9,0xe1,0xa4,0xb5,0xa4,0xf3,0xa1,0xa1,0xa1,0xa1,
+                0xa1,0xa1,0xa1,0xa1,
+              ];
 
     device.GPIOA.bsrr.write(|w| w.bs11().set());
 
+    let tim11 = &device.TIM11;
+    tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); // 500ms
+    tim11.cr1.modify(|_,w| w.cen().enabled());
+
+    let char_count = chars.len()/2;
+    let mut start_point = 0;
     loop {
-        // your code goes here
+        if start_point==0 {
+            tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); 
+        } else {
+            tim11.arr.modify(|_,w| unsafe { w.arr().bits(CONTICUE_TIME) }); 
+        }
+
+        matrix.clear();
+        let char_start = start_point / 8;
+        let char_end = if (start_point % 8)==0 {
+                                char_start+3
+                            } else {
+                                char_start+4
+                            };
+        let char_end = core::cmp::min(char_end, char_count);
+        let mut disp_xpos:i32 = -((start_point%8) as i32);
+        for i in char_start..char_end+1 {
+            let font = FONT88.get_char(chars[i*2], chars[i*2+1]);
+            matrix.draw_bitmap(disp_xpos, 0, 8, font);
+            disp_xpos += 8;
+        }
+        matrix.flash_led();
+        start_point += 1;
+
+        if start_point > 8*char_count - 32 {
+            start_point = 0;
+        }
+        
+        while tim11.sr.read().uif().is_clear() {
+            cortex_m::asm::nop();
+        }
+        tim11.sr.modify(|_,w| w.uif().clear());
     }
 }
-
-                
-
 
 /// システムクロックの初期設定
 /// 　クロック周波数　48MHz
@@ -124,7 +157,6 @@ fn spi1_setup(device : &stm32f401::Peripherals) {
     spi1.cr1.modify(|_,w| w.ssi().slave_not_selected());
 }
 
-/*
 /// TIM11のセットアップ
 fn tim11_setup(device : &stm32f401::Peripherals) {
     // TIM11 電源
@@ -133,6 +165,4 @@ fn tim11_setup(device : &stm32f401::Peripherals) {
     // TIM11 セットアップ
     let tim11 = &device.TIM11;
     tim11.psc.modify(|_,w| w.psc().bits(48_000u16 - 1)); // 1ms
-    tim11.arr.modify(|_,w| unsafe { w.arr().bits(500u16) }); // 500ms
 }
-*/
