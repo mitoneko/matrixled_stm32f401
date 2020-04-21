@@ -8,7 +8,10 @@ extern crate panic_halt; // you can put a breakpoint on `rust_begin_unwind` to c
 // extern crate panic_semihosting; // logs messages to the host stderr; requires a debugger
 
 use cortex_m_rt::entry;
+use cortex_m::interrupt::free;
 use stm32f4::stm32f401;
+use stm32f4::stm32f401::interrupt;
+
 //use cortex_m_semihosting::dbg;
 
 use misakifont::font88::FONT88;
@@ -16,6 +19,8 @@ use matrixled::matrix_led;
 
 const START_TIME:u16 = 1500u16;
 const CONTICUE_TIME:u16 = 200u16;
+
+static WAKE_TIMER :WakeTimer = WAKE_TIMER_INIT;
 
 #[entry]
 fn main() -> ! {
@@ -26,7 +31,6 @@ fn main() -> ! {
     spi1_setup(&device);
     tim11_setup(&device);
 
-    device.GPIOA.bsrr.write(|w| w.bs1().set());
 
     let mut matrix = matrix_led::Matrix::new(&device);
 
@@ -42,45 +46,78 @@ fn main() -> ! {
     device.GPIOA.bsrr.write(|w| w.bs11().set());
 
     let tim11 = &device.TIM11;
-    tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); // 500ms
+    tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); 
     tim11.cr1.modify(|_,w| w.cen().enabled());
+    free(|cs| WAKE_TIMER.set(cs));
 
     let char_count = chars.len()/2;
     let mut start_point = 0;
     loop {
-        if start_point==0 {
-            tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); 
-        } else {
-            tim11.arr.modify(|_,w| unsafe { w.arr().bits(CONTICUE_TIME) }); 
+        if free(|cs| WAKE_TIMER.get(cs)) {
+            if start_point==0 {
+                tim11.arr.modify(|_,w| unsafe { w.arr().bits(START_TIME) }); 
+            } else {
+                tim11.arr.modify(|_,w| unsafe { w.arr().bits(CONTICUE_TIME) }); 
+            }
+
+            matrix.clear();
+            let char_start = start_point / 8;
+            let char_end = if (start_point % 8)==0 {
+                                    char_start+3
+                                } else {
+                                    char_start+4
+                                };
+            let char_end = core::cmp::min(char_end, char_count);
+            let mut disp_xpos:i32 = -((start_point%8) as i32);
+            for i in char_start..char_end+1 {
+                let font = FONT88.get_char(chars[i*2], chars[i*2+1]);
+                matrix.draw_bitmap(disp_xpos, 0, 8, font);
+                disp_xpos += 8;
+            }
+            matrix.flash_led();
+            start_point += 1;
+
+            if start_point > 8*char_count - 32 {
+                start_point = 0;
+            }
+            free(|cs| WAKE_TIMER.reset(cs));
         }
 
-        matrix.clear();
-        let char_start = start_point / 8;
-        let char_end = if (start_point % 8)==0 {
-                                char_start+3
-                            } else {
-                                char_start+4
-                            };
-        let char_end = core::cmp::min(char_end, char_count);
-        let mut disp_xpos:i32 = -((start_point%8) as i32);
-        for i in char_start..char_end+1 {
-            let font = FONT88.get_char(chars[i*2], chars[i*2+1]);
-            matrix.draw_bitmap(disp_xpos, 0, 8, font);
-            disp_xpos += 8;
-        }
-        matrix.flash_led();
-        start_point += 1;
-
-        if start_point > 8*char_count - 32 {
-            start_point = 0;
-        }
-        
-        while tim11.sr.read().uif().is_clear() {
-            cortex_m::asm::nop();
-        }
-        tim11.sr.modify(|_,w| w.uif().clear());
+        device.GPIOA.bsrr.write(|w| w.br1().reset());
+        cortex_m::asm::wfi();
+        device.GPIOA.bsrr.write(|w| w.bs1().set());
     }
 }
+
+use core::cell::UnsafeCell;
+/// TIM11割り込み関数
+#[interrupt]
+fn TIM1_TRG_COM_TIM11() {
+    free(|cs| {
+        unsafe {
+            let device = stm32f401::Peripherals::steal();
+            device.TIM11.sr.modify(|_,w| w.uif().clear());
+        }
+        WAKE_TIMER.set(cs);
+    });
+}
+
+/// タイマーの起動を知らせるフラグ
+/// グローバル　イミュータブル変数とする
+struct WakeTimer(UnsafeCell<bool>);
+const WAKE_TIMER_INIT: WakeTimer = WakeTimer(UnsafeCell::new(false));
+impl WakeTimer {
+    pub fn set(&self, _cs: &cortex_m::interrupt::CriticalSection) {
+        unsafe { *self.0.get() = true };
+    }
+    pub fn reset(&self, _cs: &cortex_m::interrupt::CriticalSection) {
+        unsafe { *self.0.get() = false };
+    }
+    pub fn get(&self, _cs: &cortex_m::interrupt::CriticalSection) -> bool {
+        unsafe { *self.0.get() }
+    }
+}
+unsafe impl Sync for WakeTimer { }
 
 /// システムクロックの初期設定
 /// 　クロック周波数　48MHz
@@ -165,4 +202,10 @@ fn tim11_setup(device : &stm32f401::Peripherals) {
     // TIM11 セットアップ
     let tim11 = &device.TIM11;
     tim11.psc.modify(|_,w| w.psc().bits(48_000u16 - 1)); // 1ms
+    tim11.dier.modify(|_,w| w.uie().enabled());
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(
+            stm32f401::interrupt::TIM1_TRG_COM_TIM11);
+    }
+    
 }

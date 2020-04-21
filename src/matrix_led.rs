@@ -82,7 +82,7 @@ impl<'a> Matrix<'a> {
     fn init_mat_led(&self) {
         const INIT_PAT: [u16; 5] = [0x0F00,  // テストモード解除
                                     0x0900,  // BCDデコードバイパス 
-                                    0x0A03,  // 輝度制御　下位4bit MAX:F
+                                    0x0A02,  // 輝度制御　下位4bit MAX:F
                                     0x0B07,  // スキャン桁指定 下位4bit MAX:7
                                     0x0C01,  // シャットダウンモード　解除
                                    ];
