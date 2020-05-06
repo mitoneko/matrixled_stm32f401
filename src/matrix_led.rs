@@ -18,6 +18,8 @@ impl<'a> Matrix<'a> {
                         device,
                         spi: &device.SPI1
                     };
+        led.gpio_setup();
+        led.spi1_setup();
         led.init_mat_led();
         led
     }
@@ -145,5 +147,40 @@ impl<'a> Matrix<'a> {
     fn cs_enable(&self) {
         self.device.GPIOA.bsrr.write(|w| w.br4().reset());
     }
+
+    /// SPIのセットアップ
+    fn spi1_setup(&self) {
+        // 電源投入
+        self.device.RCC.apb2enr.modify(|_,w| w.spi1en().enabled());
+
+        self.spi.cr1.modify(|_,w| w.bidimode().unidirectional());
+        self.spi.cr1.modify(|_,w| w.dff().sixteen_bit());
+        self.spi.cr1.modify(|_,w| w.lsbfirst().msbfirst());
+        self.spi.cr1.modify(|_,w| w.br().div4()); // 基準クロックは48MHz
+        self.spi.cr1.modify(|_,w| w.mstr().master());
+        self.spi.cr1.modify(|_,w| w.cpol().idle_low());
+        self.spi.cr1.modify(|_,w| w.cpha().first_edge());
+        self.spi.cr1.modify(|_,w| w.ssm().enabled());
+        self.spi.cr1.modify(|_,w| w.ssi().slave_not_selected());
+    }
+
+    /// gpioのセットアップ
+    fn gpio_setup(&self) {
+        self.device.RCC.ahb1enr.modify(|_,w| w.gpioaen().enabled());
+        // SPI端子割付け
+        let gpioa = &self.device.GPIOA;
+        gpioa.moder.modify(|_,w| w.moder7().alternate()); // SPI1_MOSI
+        gpioa.afrl.modify(|_,w| w.afrl7().af5());
+        gpioa.ospeedr.modify(|_,w| w.ospeedr7().very_high_speed());
+        gpioa.otyper.modify(|_,w| w.ot7().push_pull());
+        gpioa.moder.modify(|_,w| w.moder5().alternate()); // SPI1_CLK
+        gpioa.afrl.modify(|_,w| w.afrl5().af5());
+        gpioa.ospeedr.modify(|_,w| w.ospeedr5().very_high_speed());
+        gpioa.otyper.modify(|_,w| w.ot5().push_pull());
+        gpioa.moder.modify(|_,w| w.moder4().output());   // NSS(CS)
+        gpioa.ospeedr.modify(|_,w| w.ospeedr4().very_high_speed());
+        gpioa.otyper.modify(|_,w| w.ot4().push_pull());
+    }
+
 }
 
