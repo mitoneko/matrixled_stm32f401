@@ -28,7 +28,6 @@ fn main() -> ! {
 
     init_clock(&device);
     gpio_setup(&device);
-    spi1_setup(&device);
     tim11_setup(&device);
 
 
@@ -162,35 +161,6 @@ fn gpio_setup(device : &stm32f401::Peripherals) {
     gpioa.moder.modify(|_,w| w.moder10().output());
     gpioa.moder.modify(|_,w| w.moder11().output());
 
-    // SPI端子割付け
-    gpioa.moder.modify(|_,w| w.moder7().alternate()); // SPI1_MOSI
-    gpioa.afrl.modify(|_,w| w.afrl7().af5());
-    gpioa.ospeedr.modify(|_,w| w.ospeedr7().very_high_speed());
-    gpioa.otyper.modify(|_,w| w.ot7().push_pull()); 
-    gpioa.moder.modify(|_,w| w.moder5().alternate()); // SPI1_CLK
-    gpioa.afrl.modify(|_,w| w.afrl5().af5());
-    gpioa.ospeedr.modify(|_,w| w.ospeedr5().very_high_speed());
-    gpioa.otyper.modify(|_,w| w.ot5().push_pull());
-    gpioa.moder.modify(|_,w| w.moder4().output());   // NSS(CS)
-    gpioa.ospeedr.modify(|_,w| w.ospeedr4().very_high_speed());
-    gpioa.otyper.modify(|_,w| w.ot4().push_pull());
-}
-
-/// SPIのセットアップ
-fn spi1_setup(device : &stm32f401::Peripherals) {
-    // 電源投入
-    device.RCC.apb2enr.modify(|_,w| w.spi1en().enabled());
-
-    let spi1 = &device.SPI1;
-    spi1.cr1.modify(|_,w| w.bidimode().unidirectional());
-    spi1.cr1.modify(|_,w| w.dff().sixteen_bit());
-    spi1.cr1.modify(|_,w| w.lsbfirst().msbfirst());
-    spi1.cr1.modify(|_,w| w.br().div4()); // 基準クロックは48MHz
-    spi1.cr1.modify(|_,w| w.mstr().master());
-    spi1.cr1.modify(|_,w| w.cpol().idle_low());
-    spi1.cr1.modify(|_,w| w.cpha().first_edge());
-    spi1.cr1.modify(|_,w| w.ssm().enabled());
-    spi1.cr1.modify(|_,w| w.ssi().slave_not_selected());
 }
 
 /// TIM11のセットアップ
