@@ -105,6 +105,36 @@ impl<'a> Matrix<'a> {
         self.spi_disable();
     }
 
+    /// SPI1 [u16;4]のデータのDMA送信要求
+    ///   MatrixLED 4ブロック分のデータの送信を行う。
+    ///   要求データが4ハーフワード(8バイト)より大きい場合は
+    ///   末尾を末尾を切り捨てる。
+    fn send_request_to_dma(&self, datas: &[u16]) {
+        static mut dmabuff: [u16; 4] = [0u16; 4];
+        unsafe {
+            dmabuff.copy_from_slice(&datas[..4]);
+        }
+        let adr = dmabuff.as_ptr() as u32;
+        let dma = &self.device.DMA2;
+        dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
+        dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
+        dma.lifcr.write(|w| {
+            w.ctcif3().clear();
+            w.chtif3().clear();
+            w.cteif3().clear();
+            w.cdmeif3().clear()
+        });
+        self.spi_enable();
+        dma.st[3].cr.modify(|_, w| w.en().enabled());
+        while dma.st[3].cr.read().en().is_enabled() {
+            cortex_m::asm::nop();
+        }
+        while self.spi.sr.read().bsy().is_busy() {
+            cortex_m::asm::nop();
+        }
+        self.spi_disable();
+    }
+
     /// SPI1 16ビットのデータを送信する。
     fn spi_send_word(&self, data: u16) {
         while self.spi.sr.read().txe().is_not_empty() {
@@ -187,23 +217,17 @@ impl<'a> Matrix<'a> {
     fn dma_setup(&self) {
         self.device.RCC.ahb1enr.modify(|_, w| w.dma2en().enabled());
         // DMAストリーム3のチャンネル3使用
+        let st3_3 = &self.device.DMA2.st[3];
         unsafe {
-            self.device.DMA2.st[3].cr.modify(|_, w| w.chsel().bits(3u8));
+            st3_3.cr.modify(|_, w| w.chsel().bits(3u8));
         }
-        self.device.DMA2.st[3].cr.modify(|_, w| w.msize().bit16());
-        self.device.DMA2.st[3].cr.modify(|_, w| w.psize().bit16());
-        self.device.DMA2.st[3]
-            .cr
-            .modify(|_, w| w.minc().incremented());
-        self.device.DMA2.st[3].cr.modify(|_, w| w.pinc().fixed());
-        self.device.DMA2.st[3]
-            .cr
-            .modify(|_, w| w.dir().memory_to_peripheral());
-        self.device.DMA2.st[3]
-            .cr
-            .modify(|_, w| w.pfctrl().peripheral());
-        self.device.DMA2.st[3]
-            .par
-            .write(|w| w.par().bits(0x4001_300Cu32));
+        st3_3.cr.modify(|_, w| w.msize().bits16());
+        st3_3.cr.modify(|_, w| w.psize().bits16());
+        st3_3.cr.modify(|_, w| w.minc().incremented());
+        st3_3.cr.modify(|_, w| w.pinc().fixed());
+        st3_3.cr.modify(|_, w| w.dir().memory_to_peripheral());
+        st3_3.cr.modify(|_, w| w.pfctrl().peripheral());
+        let spi1_dr = &self.device.SPI1.dr as *const _ as u32;
+        st3_3.par.write(|w| w.pa().bits(spi1_dr));
     }
 }
