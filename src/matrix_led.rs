@@ -20,6 +20,7 @@ impl<'a> Matrix<'a> {
         led.gpio_setup();
         led.spi1_setup();
         led.init_mat_led();
+        led.dma_setup();
         led
     }
 
@@ -74,11 +75,7 @@ impl<'a> Matrix<'a> {
             digi_code | (((pat >> 08) & 0x00FF) as u16),
             digi_code | (((pat) & 0x00FF) as u16),
         ];
-        self.spi_enable();
-        for d in &dat {
-            self.spi_send_word(*d);
-        }
-        self.spi_disable();
+        self.send_request_to_dma(&dat);
     }
 
     /// Matrix LED 初期化
@@ -92,40 +89,33 @@ impl<'a> Matrix<'a> {
         ];
 
         for pat in &INIT_PAT {
-            self.spi_send_word4(*pat);
+            self.send_request_to_dma(&[*pat; 4]);
         }
     }
 
+    /*
     /// LED4セットに同じ16bitデータを送信する
     fn spi_send_word4(&self, data: u16) {
-        self.spi_enable();
-        for _x in 0..5 {
-            self.spi_send_word(data);
-        }
-        self.spi_disable();
+        self.send_request_to_dma(&[data; 4]);
     }
+    */
 
     /// SPI1 [u16;4]のデータのDMA送信要求
     ///   MatrixLED 4ブロック分のデータの送信を行う。
     ///   要求データが4ハーフワード(8バイト)より大きい場合は
     ///   末尾を末尾を切り捨てる。
     fn send_request_to_dma(&self, datas: &[u16]) {
-        static mut dmabuff: [u16; 4] = [0u16; 4];
-        unsafe {
-            dmabuff.copy_from_slice(&datas[..4]);
-        }
-        let adr = dmabuff.as_ptr() as u32;
+        static mut DMABUFF: [u16; 4] = [0u16; 4];
         let dma = &self.device.DMA2;
-        dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
+        unsafe {
+            DMABUFF.copy_from_slice(&datas[..4]);
+            let adr = DMABUFF.as_ptr() as u32;
+            dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
+        }
         dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
-        dma.lifcr.write(|w| {
-            w.ctcif3().clear();
-            w.chtif3().clear();
-            w.cteif3().clear();
-            w.cdmeif3().clear()
-        });
+
         self.spi_enable();
-        dma.st[3].cr.modify(|_, w| w.en().enabled());
+        self.dma_start();
         while dma.st[3].cr.read().en().is_enabled() {
             cortex_m::asm::nop();
         }
@@ -135,13 +125,27 @@ impl<'a> Matrix<'a> {
         self.spi_disable();
     }
 
-    /// SPI1 16ビットのデータを送信する。
-    fn spi_send_word(&self, data: u16) {
-        while self.spi.sr.read().txe().is_not_empty() {
-            cortex_m::asm::nop(); // wait
-        }
-        self.spi.dr.write(|w| w.dr().bits(data));
+    /// DMAの完了フラグをクリアし、DMAを開始する
+    fn dma_start(&self) {
+        let dma = &self.device.DMA2;
+        dma.lifcr.write(|w| {
+            w.ctcif3().clear();
+            w.chtif3().clear();
+            w.cteif3().clear();
+            w.cdmeif3().clear()
+        });
+        dma.st[3].cr.modify(|_, w| w.en().enabled());
     }
+
+    /*
+        /// SPI1 16ビットのデータを送信する。
+        fn spi_send_word(&self, data: u16) {
+            while self.spi.sr.read().txe().is_not_empty() {
+                cortex_m::asm::nop(); // wait
+            }
+            self.spi.dr.write(|w| w.dr().bits(data));
+        }
+    */
 
     /// spi通信有効にセット
     fn spi_enable(&self) {
@@ -184,15 +188,18 @@ impl<'a> Matrix<'a> {
         // 電源投入
         self.device.RCC.apb2enr.modify(|_, w| w.spi1en().enabled());
 
-        self.spi.cr1.modify(|_, w| w.bidimode().unidirectional());
-        self.spi.cr1.modify(|_, w| w.dff().sixteen_bit());
-        self.spi.cr1.modify(|_, w| w.lsbfirst().msbfirst());
-        self.spi.cr1.modify(|_, w| w.br().div4()); // 基準クロックは48MHz
-        self.spi.cr1.modify(|_, w| w.mstr().master());
-        self.spi.cr1.modify(|_, w| w.cpol().idle_low());
-        self.spi.cr1.modify(|_, w| w.cpha().first_edge());
-        self.spi.cr1.modify(|_, w| w.ssm().enabled());
-        self.spi.cr1.modify(|_, w| w.ssi().slave_not_selected());
+        self.spi.cr1.modify(|_, w| {
+            w.bidimode().unidirectional().
+            dff().sixteen_bit().
+            lsbfirst().msbfirst().
+            br().div4(). // 基準クロックは48MHz
+            mstr().master().
+            cpol().idle_low().
+            cpha().first_edge().
+            ssm().enabled().
+            ssi().slave_not_selected()
+        });
+        self.spi.cr2.modify(|_, w| w.txdmaen().enabled());
     }
 
     /// gpioのセットアップ
@@ -221,12 +228,14 @@ impl<'a> Matrix<'a> {
         unsafe {
             st3_3.cr.modify(|_, w| w.chsel().bits(3u8));
         }
-        st3_3.cr.modify(|_, w| w.msize().bits16());
-        st3_3.cr.modify(|_, w| w.psize().bits16());
-        st3_3.cr.modify(|_, w| w.minc().incremented());
-        st3_3.cr.modify(|_, w| w.pinc().fixed());
-        st3_3.cr.modify(|_, w| w.dir().memory_to_peripheral());
-        st3_3.cr.modify(|_, w| w.pfctrl().peripheral());
+        st3_3.cr.modify(|_, w| {
+            w.msize().bits16();
+            w.psize().bits16();
+            w.minc().incremented();
+            w.pinc().fixed();
+            w.dir().memory_to_peripheral();
+            w.pfctrl().peripheral()
+        });
         let spi1_dr = &self.device.SPI1.dr as *const _ as u32;
         st3_3.par.write(|w| w.pa().bits(spi1_dr));
     }
