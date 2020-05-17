@@ -10,6 +10,9 @@ pub struct Matrix<'a> {
     spi: &'a stm32f401::SPI1,
 }
 
+/// DMA転送用バッファ領域
+static mut DMABUFF: [u16; 4] = [0u16; 4];
+
 impl<'a> Matrix<'a> {
     pub fn new(device: &stm32f401::Peripherals) -> Matrix {
         let led = Matrix {
@@ -19,8 +22,8 @@ impl<'a> Matrix<'a> {
         };
         led.gpio_setup();
         led.spi1_setup();
-        led.init_mat_led();
         led.dma_setup();
+        led.init_mat_led();
         led
     }
 
@@ -93,22 +96,17 @@ impl<'a> Matrix<'a> {
         }
     }
 
-    /*
-    /// LED4セットに同じ16bitデータを送信する
-    fn spi_send_word4(&self, data: u16) {
-        self.send_request_to_dma(&[data; 4]);
-    }
-    */
-
     /// SPI1 [u16;4]のデータのDMA送信要求
     ///   MatrixLED 4ブロック分のデータの送信を行う。
     ///   要求データが4ハーフワード(8バイト)より大きい場合は
     ///   末尾を末尾を切り捨てる。
     fn send_request_to_dma(&self, datas: &[u16]) {
-        static mut DMABUFF: [u16; 4] = [0u16; 4];
         let dma = &self.device.DMA2;
+        while dma.st[3].cr.read().en().is_enabled() {}
         unsafe {
-            DMABUFF.copy_from_slice(&datas[..4]);
+            for i in 0..4 {
+                DMABUFF[i] = datas[i]; //.swap_bytes();
+            }
             let adr = DMABUFF.as_ptr() as u32;
             dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
         }
@@ -116,12 +114,9 @@ impl<'a> Matrix<'a> {
 
         self.spi_enable();
         self.dma_start();
-        while dma.st[3].cr.read().en().is_enabled() {
-            cortex_m::asm::nop();
-        }
-        while self.spi.sr.read().bsy().is_busy() {
-            cortex_m::asm::nop();
-        }
+        while dma.lisr.read().tcif3().is_not_complete() {}
+        dma.st[3].cr.modify(|_, w| w.en().disabled());
+        while self.spi.sr.read().bsy().is_busy() {}
         self.spi_disable();
     }
 
@@ -129,23 +124,19 @@ impl<'a> Matrix<'a> {
     fn dma_start(&self) {
         let dma = &self.device.DMA2;
         dma.lifcr.write(|w| {
-            w.ctcif3().clear();
-            w.chtif3().clear();
-            w.cteif3().clear();
-            w.cdmeif3().clear()
+            w.ctcif3()
+                .clear()
+                .chtif3()
+                .clear()
+                .cteif3()
+                .clear()
+                .cdmeif3()
+                .clear()
+                .cfeif3()
+                .clear()
         });
         dma.st[3].cr.modify(|_, w| w.en().enabled());
     }
-
-    /*
-        /// SPI1 16ビットのデータを送信する。
-        fn spi_send_word(&self, data: u16) {
-            while self.spi.sr.read().txe().is_not_empty() {
-                cortex_m::asm::nop(); // wait
-            }
-            self.spi.dr.write(|w| w.dr().bits(data));
-        }
-    */
 
     /// spi通信有効にセット
     fn spi_enable(&self) {
@@ -229,13 +220,42 @@ impl<'a> Matrix<'a> {
             st3_3.cr.modify(|_, w| w.chsel().bits(3u8));
         }
         st3_3.cr.modify(|_, w| {
-            w.msize().bits16();
-            w.psize().bits16();
-            w.minc().incremented();
-            w.pinc().fixed();
-            w.dir().memory_to_peripheral();
-            w.pfctrl().peripheral()
+            w.mburst()
+                .incr4()
+                .pburst()
+                .single()
+                .ct()
+                .memory0()
+                .dbm()
+                .disabled()
+                .pl()
+                .medium()
+                .pincos()
+                .psize()
+                .msize()
+                .bits16()
+                .psize()
+                .bits16()
+                .minc()
+                .incremented()
+                .pinc()
+                .fixed()
+                .circ()
+                .disabled()
+                .dir()
+                .memory_to_peripheral()
+                .tcie()
+                .enabled()
+                .htie()
+                .disabled()
+                .teie()
+                .enabled()
+                .dmeie()
+                .enabled()
         });
+        st3_3
+            .fcr
+            .modify(|_, w| w.feie().enabled().dmdis().disabled().fth().half());
         let spi1_dr = &self.device.SPI1.dr as *const _ as u32;
         st3_3.par.write(|w| w.pa().bits(spi1_dr));
     }
