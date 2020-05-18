@@ -10,9 +10,6 @@ pub struct Matrix<'a> {
     spi: &'a stm32f401::SPI1,
 }
 
-/// DMA転送用バッファ領域
-static mut DMABUFF: [u16; 4] = [0u16; 4];
-
 impl<'a> Matrix<'a> {
     pub fn new(device: &stm32f401::Peripherals) -> Matrix {
         let led = Matrix {
@@ -78,7 +75,8 @@ impl<'a> Matrix<'a> {
             digi_code | (((pat >> 08) & 0x00FF) as u16),
             digi_code | (((pat) & 0x00FF) as u16),
         ];
-        self.send_request_to_dma(&dat);
+        todo!();
+        self.send_request_to_dma();
     }
 
     /// Matrix LED 初期化
@@ -92,32 +90,29 @@ impl<'a> Matrix<'a> {
         ];
 
         for pat in &INIT_PAT {
-            self.send_request_to_dma(&[*pat; 4]);
+            todo!();
+            self.send_request_to_dma();
         }
     }
 
-    /// SPI1 [u16;4]のデータのDMA送信要求
-    ///   MatrixLED 4ブロック分のデータの送信を行う。
-    ///   要求データが4ハーフワード(8バイト)より大きい場合は
-    ///   末尾を末尾を切り捨てる。
-    fn send_request_to_dma(&self, datas: &[u16]) {
+    /// SPI1 データのDMA送信要求
+    ///   MatrixLED 4ブロック*行数 分のデータの送信を行う。
+    ///   送信データは、事前にDMA_BUFFに投入済みのこと。
+    fn send_request_to_dma(&self) {
         let dma = &self.device.DMA2;
-        while dma.st[3].cr.read().en().is_enabled() {}
-        unsafe {
-            for i in 0..4 {
-                DMABUFF[i] = datas[i]; //.swap_bytes();
-            }
-            let adr = DMABUFF.as_ptr() as u32;
+        for data in DMA_BUFF.iter() {
+            while dma.st[3].cr.read().en().is_enabled() {}
+            let adr = data.as_ptr() as u32;
             dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
-        }
-        dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
+            dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
 
-        self.spi_enable();
-        self.dma_start();
-        while dma.lisr.read().tcif3().is_not_complete() {}
-        dma.st[3].cr.modify(|_, w| w.en().disabled());
-        while self.spi.sr.read().bsy().is_busy() {}
-        self.spi_disable();
+            self.spi_enable();
+            self.dma_start();
+            while dma.lisr.read().tcif3().is_not_complete() {}
+            dma.st[3].cr.modify(|_, w| w.en().disabled());
+            while self.spi.sr.read().bsy().is_busy() {}
+            self.spi_disable();
+        }
     }
 
     /// DMAの完了フラグをクリアし、DMAを開始する
@@ -258,5 +253,85 @@ impl<'a> Matrix<'a> {
             .modify(|_, w| w.feie().enabled().dmdis().disabled().fth().half());
         let spi1_dr = &self.device.SPI1.dr as *const _ as u32;
         st3_3.par.write(|w| w.pa().bits(spi1_dr));
+    }
+}
+
+/// DMAバッファ領域
+/// 　グローバル変数・matrix_ledモジュール以外での操作禁止
+///   DMA2_S3CR.ENビットが0の時のみ操作可能
+static DMA_BUFF: DmaBuff = DMA_BUFF_INIT;
+
+type Result<T> = core::result::Result<T, &'static str>;
+
+use core::cell::UnsafeCell;
+struct DmaBuff {
+    buff: UnsafeCell<[[u16; 4]; 8]>,
+    data_count: UnsafeCell<usize>,
+}
+
+const DMA_BUFF_INIT: DmaBuff = DmaBuff {
+    buff: UnsafeCell::new([[0u16; 4]; 8]),
+    data_count: UnsafeCell::new(0),
+};
+
+unsafe impl Sync for DmaBuff {}
+
+impl DmaBuff {
+    pub fn clear_buff(&self, device: &stm32f401::Peripherals) -> Result<()> {
+        Self::is_dma_inactive(device)?;
+        unsafe {
+            &(*self.buff.get()).clone_from_slice(&[[0; 4]; 8]);
+            *self.data_count.get() = 0;
+        }
+        Ok(())
+    }
+
+    pub fn add_buff(&self, data: &[u16], device: &stm32f401::Peripherals) -> Result<()> {
+        Self::is_dma_inactive(device)?;
+        unsafe {
+            if *self.data_count.get() < 8 {
+                *self.data_count.get() += 1;
+            } else {
+                return Err("Buffer over flow");
+            }
+            &(*self.buff.get())[*self.data_count.get() - 1].clone_from_slice(&data[0..4]);
+        }
+        Ok(())
+    }
+
+    pub fn iter(&self) -> DmaBuffIter {
+        DmaBuffIter { cur_index: 0 }
+    }
+
+    fn is_dma_inactive(device: &stm32f401::Peripherals) -> Result<()> {
+        if device.DMA2.st[3].cr.read().en().is_enabled() {
+            Err("DMA2 stream active")
+        } else {
+            Ok(())
+        }
+    }
+
+    fn get_buff(&self, index: usize) -> Option<&[u16; 4]> {
+        unsafe {
+            if index < *self.data_count.get() {
+                Some(&(*self.buff.get())[index])
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// DmaBuff用Iterator
+struct DmaBuffIter {
+    cur_index: usize,
+}
+
+impl Iterator for DmaBuffIter {
+    type Item = &'static [u16; 4];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.cur_index += 1;
+        DMA_BUFF.get_buff(self.cur_index)
     }
 }
