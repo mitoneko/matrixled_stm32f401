@@ -58,15 +58,17 @@ impl<'a> Matrix<'a> {
 
     /// Matrix LEDにvideo_ramの内容を表示する。
     pub fn flash_led(&self) {
+        while let Err(_) = DMA_BUFF.clear_buff(self.device) {}
         for x in 0..8 {
             self.send_oneline_mat_led(x);
         }
+        self.send_request_to_dma();
     }
 
-    /// Matrix LED に一行を送る
+    /// Matrix LED BUFFに一行を送る
     /// # 引数
     ///     line_num:   一番上が0。一番下が7
-    pub fn send_oneline_mat_led(&self, line_num: u32) {
+    fn send_oneline_mat_led(&self, line_num: u32) {
         let digi_code: u16 = ((line_num + 1) << 8) as u16;
         let pat = self.video_ram[line_num as usize];
         let dat: [u16; 4] = [
@@ -75,8 +77,7 @@ impl<'a> Matrix<'a> {
             digi_code | (((pat >> 08) & 0x00FF) as u16),
             digi_code | (((pat) & 0x00FF) as u16),
         ];
-        todo!();
-        self.send_request_to_dma();
+        DMA_BUFF.add_buff(&dat, self.device).unwrap();
     }
 
     /// Matrix LED 初期化
@@ -89,10 +90,11 @@ impl<'a> Matrix<'a> {
             0x0C01, // シャットダウンモード　解除
         ];
 
+        while let Err(_) = DMA_BUFF.clear_buff(self.device) {}
         for pat in &INIT_PAT {
-            todo!();
-            self.send_request_to_dma();
+            DMA_BUFF.add_buff(&[*pat; 4], self.device).unwrap();
         }
+        self.send_request_to_dma();
     }
 
     /// SPI1 データのDMA送信要求
@@ -280,7 +282,6 @@ impl DmaBuff {
     pub fn clear_buff(&self, device: &stm32f401::Peripherals) -> Result<()> {
         Self::is_dma_inactive(device)?;
         unsafe {
-            &(*self.buff.get()).clone_from_slice(&[[0; 4]; 8]);
             *self.data_count.get() = 0;
         }
         Ok(())
