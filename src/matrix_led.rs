@@ -108,57 +108,54 @@ impl<'a> Matrix<'a> {
             dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
             dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
 
-            self.spi_enable();
-            self.dma_start();
+            Self::spi_enable(&self.device);
+            Self::dma_start(&self.device);
             while dma.lisr.read().tcif3().is_not_complete() {}
             dma.st[3].cr.modify(|_, w| w.en().disabled());
             while self.spi.sr.read().bsy().is_busy() {}
-            self.spi_disable();
+            Self::spi_disable(&self.device);
         }
     }
 
     /// DMAの完了フラグをクリアし、DMAを開始する
-    fn dma_start(&self) {
-        let dma = &self.device.DMA2;
+    fn dma_start(device: &stm32f401::Peripherals) {
+        let dma = &device.DMA2;
         dma.lifcr.write(|w| {
-            w.ctcif3()
-                .clear()
-                .chtif3()
-                .clear()
-                .cteif3()
-                .clear()
-                .cdmeif3()
-                .clear()
-                .cfeif3()
-                .clear()
+            w.ctcif3().clear();
+            w.chtif3().clear();
+            w.cteif3().clear();
+            w.cdmeif3().clear();
+            w.cfeif3().clear()
         });
         dma.st[3].cr.modify(|_, w| w.en().enabled());
     }
 
     /// spi通信有効にセット
-    fn spi_enable(&self) {
-        self.cs_enable();
-        self.spi.cr1.modify(|_, w| w.spe().enabled());
+    fn spi_enable(device: &stm32f401::Peripherals) {
+        let spi = &device.SPI1;
+        Self::cs_enable(&device);
+        spi.cr1.modify(|_, w| w.spe().enabled());
     }
 
     /// spi通信無効にセット
     ///   LEDのデータ確定シーケンス含む
-    fn spi_disable(&self) {
-        while self.spi.sr.read().txe().is_not_empty() {
+    fn spi_disable(device: &stm32f401::Peripherals) {
+        let spi = &device.SPI1;
+        while spi.sr.read().txe().is_not_empty() {
             cortex_m::asm::nop();
         }
-        while self.spi.sr.read().bsy().is_busy() {
+        while spi.sr.read().bsy().is_busy() {
             cortex_m::asm::nop(); // wait
         }
-        self.cs_disable();
-        self.spi.cr1.modify(|_, w| w.spe().disabled());
+        Self::cs_disable(&device);
+        spi.cr1.modify(|_, w| w.spe().disabled());
     }
 
     /// CS(DATA) ピンを 通信無効(HI)にする
     /// CSピンは、PA4に固定(ハードコート)
-    fn cs_disable(&self) {
-        self.device.GPIOA.bsrr.write(|w| w.bs4().set());
-        for _x in 0..10 {
+    fn cs_disable(device: &stm32f401::Peripherals) {
+        device.GPIOA.bsrr.write(|w| w.bs4().set());
+        for _x in 0..5 {
             // 通信終了時は、データの確定待ちが必要
             // 最低50ns 48MHzクロックで最低3クロック
             cortex_m::asm::nop();
@@ -167,8 +164,8 @@ impl<'a> Matrix<'a> {
 
     /// CS(DATA) ピンを通信有効(LO)にする
     /// CSピンは、PA4に固定(ハードコート)
-    fn cs_enable(&self) {
-        self.device.GPIOA.bsrr.write(|w| w.br4().reset());
+    fn cs_enable(device: &stm32f401::Peripherals) {
+        device.GPIOA.bsrr.write(|w| w.br4().reset());
     }
 
     /// SPIのセットアップ
@@ -301,7 +298,7 @@ impl DmaBuff {
     }
 
     pub fn iter(&self) -> DmaBuffIter {
-        DmaBuffIter { cur_index: 0 }
+        DmaBuffIter { cur_index: None }
     }
 
     fn is_dma_inactive(device: &stm32f401::Peripherals) -> Result<()> {
@@ -325,14 +322,21 @@ impl DmaBuff {
 
 /// DmaBuff用Iterator
 struct DmaBuffIter {
-    cur_index: usize,
+    cur_index: Option<usize>,
 }
 
 impl Iterator for DmaBuffIter {
     type Item = &'static [u16; 4];
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.cur_index += 1;
-        DMA_BUFF.get_buff(self.cur_index)
+        match &mut self.cur_index {
+            Some(i) => {
+                *i += 1;
+            }
+            None => {
+                self.cur_index = Some(0);
+            }
+        };
+        DMA_BUFF.get_buff(self.cur_index.unwrap())
     }
 }
