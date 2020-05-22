@@ -32,7 +32,7 @@ fn main() -> ! {
 
     let mut matrix = matrix_led::Matrix::new(&device);
 
-    //device.GPIOA.bsrr.write(|w| w.bs10().set());
+    //device.GPIOA.bsrr.write(|w| w.bs0().set());
     //device.GPIOA.bsrr.write(|w| w.bs11().set());
 
     let chars = [
@@ -162,7 +162,7 @@ fn gpio_setup(device: &stm32f401::Peripherals) {
     // GPIOC セットアップ
     let gpioa = &device.GPIOA;
     gpioa.moder.modify(|_, w| w.moder1().output());
-    gpioa.moder.modify(|_, w| w.moder10().output());
+    gpioa.moder.modify(|_, w| w.moder0().output());
     gpioa.moder.modify(|_, w| w.moder11().output());
 }
 
