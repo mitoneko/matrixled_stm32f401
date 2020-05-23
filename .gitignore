@@ -5,6 +5,12 @@ Cargo.lock
 target/
 tags
 
+# tex中間ファイル
+tex/*.aux
+tex/*.dvi
+tex/*.log
+tex/*.toc
+
 # editor files
 .vscode/*
 !.vscode/*.md
