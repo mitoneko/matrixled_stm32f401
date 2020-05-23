@@ -1,0 +1,45 @@
+\documentclass[a4paper, 10pt]{jsarticle}
+
+\usepackage{listings,jlisting,listings-rust}
+\lstset{
+    language = RUST,
+    breaklines = true,
+    breakindent = 10pt,
+    basicstyle = \ttfamily\small,
+    frame = TBrl,
+    framesep = 5pt,
+    numbers = left,
+    stepnumber = 1,
+    numberstyle = \tiny,
+    tabsize = 4,
+    captionpos = t
+}
+
+\usepackage[dvipdfmx]{graphicx}
+\usepackage[top=1cm, bottom=1cm, left=2cm, right=1cm, includefoot]{geometry}
+
+\title{matrix\_led ソースファイル}
+\author{美都}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\clearpage
+
+\section {Cargo.toml ソース}
+\lstinputlisting{../Cargo.toml}
+\clearpage
+
+\section {main.rs ソース}
+\lstinputlisting{../src/main.rs}
+\clearpage
+
+\section {lib.rs ソース}
+\lstinputlisting{../src/lib.rs}
+\clearpage
+
+\section {matrix\_led.rs ソース}
+\lstinputlisting{../src/matrix_led.rs}
+\clearpage
+
+\end{document}
