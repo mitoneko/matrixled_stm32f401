@@ -2,6 +2,7 @@
 //!  ledサイズ　32*8
 
 use stm32f4::stm32f401;
+use stm32f4::stm32f401::interrupt;
 
 /// Matrix Ledの制御
 pub struct Matrix<'a> {
@@ -102,7 +103,8 @@ impl<'a> Matrix<'a> {
     ///   送信データは、事前にDMA_BUFFに投入済みのこと。
     fn send_request_to_dma(&self) {
         let dma = &self.device.DMA2;
-        for data in DMA_BUFF.iter() {
+        let mut i = DMA_BUFF.iter();
+        if let Some(data) = i.next() {
             while dma.st[3].cr.read().en().is_enabled() {}
             let adr = data.as_ptr() as u32;
             dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
@@ -110,10 +112,30 @@ impl<'a> Matrix<'a> {
 
             Self::spi_enable(&self.device);
             Self::dma_start(&self.device);
-            while dma.lisr.read().tcif3().is_not_complete() {}
-            dma.st[3].cr.modify(|_, w| w.en().disabled());
-            while self.spi.sr.read().bsy().is_busy() {}
-            Self::spi_disable(&self.device);
+        }
+        // 以降、2レコード目からの転送は、割込みルーチンにて
+    }
+
+    /// SPI送信終了待ちと送信終了時間の計測
+    /// 　ループ回数が一定回数以上になると、緑のLEDを点灯する
+    fn wait_api_and_measurement(device: &stm32f401::Peripherals) {
+        let dma = &device.DMA2;
+        let spi = &device.SPI1;
+        let gpioa = &device.GPIOA;
+        const WAIT_LIMIT: u32 = 31;
+        let mut count_wait = 0;
+
+        while dma.lisr.read().tcif3().is_not_complete() {
+            count_wait += 1;
+        }
+        while spi.sr.read().txe().is_not_empty() {
+            count_wait += 0;
+        }
+        while spi.sr.read().bsy().is_busy() {
+            count_wait += 0;
+        }
+        if count_wait > WAIT_LIMIT {
+            gpioa.bsrr.write(|w| w.bs0().set());
         }
     }
 
@@ -124,9 +146,9 @@ impl<'a> Matrix<'a> {
             w.ctcif3().clear();
             w.chtif3().clear();
             w.cteif3().clear();
-            w.cdmeif3().clear();
-            w.cfeif3().clear()
+            w.cdmeif3().clear()
         });
+
         dma.st[3].cr.modify(|_, w| w.en().enabled());
     }
 
@@ -210,48 +232,80 @@ impl<'a> Matrix<'a> {
         self.device.RCC.ahb1enr.modify(|_, w| w.dma2en().enabled());
         // DMAストリーム3のチャンネル3使用
         let st3_3 = &self.device.DMA2.st[3];
-        unsafe {
-            st3_3.cr.modify(|_, w| w.chsel().bits(3u8));
-        }
         st3_3.cr.modify(|_, w| {
-            w.mburst()
-                .incr4()
-                .pburst()
-                .single()
-                .ct()
-                .memory0()
-                .dbm()
-                .disabled()
-                .pl()
-                .medium()
-                .pincos()
-                .psize()
-                .msize()
-                .bits16()
-                .psize()
-                .bits16()
-                .minc()
-                .incremented()
-                .pinc()
-                .fixed()
-                .circ()
-                .disabled()
-                .dir()
-                .memory_to_peripheral()
-                .tcie()
-                .enabled()
-                .htie()
-                .disabled()
-                .teie()
-                .enabled()
-                .dmeie()
-                .enabled()
+            w.chsel().bits(3u8);
+            w.mburst().incr4();
+            w.pburst().single();
+            w.ct().memory0();
+            w.dbm().disabled();
+            w.pl().medium();
+            w.pincos().psize();
+            w.msize().bits16();
+            w.psize().bits16();
+            w.minc().incremented();
+            w.pinc().fixed();
+            w.circ().disabled();
+            w.dir().memory_to_peripheral();
+            w.tcie().enabled();
+            w.htie().disabled();
+            w.teie().disabled();
+            w.dmeie().disabled()
         });
-        st3_3
-            .fcr
-            .modify(|_, w| w.feie().enabled().dmdis().disabled().fth().half());
+        st3_3.fcr.modify(|_, w| {
+            w.feie().disabled();
+            w.dmdis().disabled();
+            w.fth().half()
+        });
         let spi1_dr = &self.device.SPI1.dr as *const _ as u32;
         st3_3.par.write(|w| w.pa().bits(spi1_dr));
+        unsafe {
+            cortex_m::peripheral::NVIC::unmask(stm32f401::interrupt::DMA2_STREAM3);
+        }
+    }
+}
+
+/// DMA2 Stream3 割込み関数
+#[interrupt]
+fn DMA2_STREAM3() {
+    static mut ITER: DmaBuffIter = DmaBuffIter { cur_index: None };
+
+    let device;
+    unsafe {
+        device = stm32f401::Peripherals::steal();
+    }
+    let dma = &device.DMA2;
+    if dma.lisr.read().tcif3().is_complete() {
+        dma.lifcr.write(|w| w.ctcif3().clear());
+        if let None = ITER.cur_index {
+            ITER.cur_index = Some(0);
+        }
+        match ITER.next() {
+            Some(data) => {
+                //次のデータの準備
+                let adr = data.as_ptr() as u32;
+                dma.st[3].m0ar.write(|w| w.m0a().bits(adr));
+                dma.st[3].ndtr.write(|w| w.ndt().bits(4u16));
+
+                //前データの確定終了処理
+                Matrix::spi_disable(&device);
+
+                //次のデータの送信開始
+                Matrix::spi_enable(&device);
+                Matrix::dma_start(&device);
+            }
+            None => {
+                //前データの確定終了処理
+                Matrix::spi_disable(&device);
+                *ITER = DmaBuffIter { cur_index: None };
+            }
+        }
+    } else {
+        dma.lifcr.write(|w| {
+            w.ctcif3().clear();
+            w.chtif3().clear();
+            w.cteif3().clear();
+            w.cdmeif3().clear()
+        });
     }
 }
 
