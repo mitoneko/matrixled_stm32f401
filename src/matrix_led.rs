@@ -12,7 +12,7 @@ pub struct Matrix<'a> {
 }
 
 impl<'a> Matrix<'a> {
-    pub fn new(device: &stm32f401::Peripherals) -> Matrix {
+    pub(super) fn new(device: &stm32f401::Peripherals) -> Matrix {
         let led = Matrix {
             video_ram: [0; 8],
             device,
@@ -114,29 +114,6 @@ impl<'a> Matrix<'a> {
             Self::dma_start(&self.device);
         }
         // 以降、2レコード目からの転送は、割込みルーチンにて
-    }
-
-    /// SPI送信終了待ちと送信終了時間の計測
-    /// 　ループ回数が一定回数以上になると、緑のLEDを点灯する
-    fn wait_api_and_measurement(device: &stm32f401::Peripherals) {
-        let dma = &device.DMA2;
-        let spi = &device.SPI1;
-        let gpioa = &device.GPIOA;
-        const WAIT_LIMIT: u32 = 31;
-        let mut count_wait = 0;
-
-        while dma.lisr.read().tcif3().is_not_complete() {
-            count_wait += 1;
-        }
-        while spi.sr.read().txe().is_not_empty() {
-            count_wait += 0;
-        }
-        while spi.sr.read().bsy().is_busy() {
-            count_wait += 0;
-        }
-        if count_wait > WAIT_LIMIT {
-            gpioa.bsrr.write(|w| w.bs0().set());
-        }
     }
 
     /// DMAの完了フラグをクリアし、DMAを開始する
@@ -276,8 +253,9 @@ fn DMA2_STREAM3() {
     let dma = &device.DMA2;
     if dma.lisr.read().tcif3().is_complete() {
         dma.lifcr.write(|w| w.ctcif3().clear());
-        if let None = ITER.cur_index {
-            ITER.cur_index = Some(0);
+        if ITER.is_first() {
+            // 初回レコードは、メイン起動側で処理済み
+            ITER.init_second();
         }
         match ITER.next() {
             Some(data) => {
@@ -296,7 +274,7 @@ fn DMA2_STREAM3() {
             None => {
                 //前データの確定終了処理
                 Matrix::spi_disable(&device);
-                *ITER = DmaBuffIter { cur_index: None };
+                ITER.init_first();
             }
         }
     } else {
@@ -392,5 +370,19 @@ impl Iterator for DmaBuffIter {
             }
         };
         DMA_BUFF.get_buff(self.cur_index.unwrap())
+    }
+}
+
+impl DmaBuffIter {
+    fn init_first(&mut self) {
+        self.cur_index = None;
+    }
+
+    fn init_second(&mut self) {
+        self.cur_index = None;
+    }
+
+    fn is_first(&self) -> bool {
+        self.cur_index == None
     }
 }

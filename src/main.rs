@@ -14,8 +14,9 @@ use stm32f4::stm32f401::interrupt;
 
 //use cortex_m_semihosting::dbg;
 
-use matrixled::matrix_led;
-use misakifont::font88::FONT88;
+use matrixled::display_led;
+use matrixled::display_led::DisplayLed;
+use matrixled::print_led;
 
 const START_TIME: u16 = 1500u16;
 const CONTICUE_TIME: u16 = 200u16;
@@ -30,58 +31,20 @@ fn main() -> ! {
     gpio_setup(&device);
     tim11_setup(&device);
 
-    let mut matrix = matrix_led::Matrix::new(&device);
+    let mut led = DisplayLed::new(&device);
 
     //device.GPIOA.bsrr.write(|w| w.bs0().set());
-    //device.GPIOA.bsrr.write(|w| w.bs11().set());
-
-    let chars = [
-        0xa4, 0xb3, 0xa4, 0xf3, 0xa4, 0xcb, 0xa4, 0xc1, 0xa4, 0xcf, 0xa1, 0xa2, 0xc8, 0xfe, 0xc5,
-        0xd4, 0xa4, 0xb5, 0xa4, 0xf3, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1,
-    ];
-
-    //device.GPIOA.bsrr.write(|w| w.bs11().set());
 
     let tim11 = &device.TIM11;
     tim11.arr.modify(|_, w| unsafe { w.arr().bits(START_TIME) });
     tim11.cr1.modify(|_, w| w.cen().enabled());
     free(|cs| WAKE_TIMER.set(cs));
 
-    let char_count = chars.len() / 2;
-    let mut start_point = 0;
     loop {
+        // タイマー割込み確認
         if free(|cs| WAKE_TIMER.get(cs)) {
-            // タイマー割込みの確認
-            if start_point == 0 {
-                tim11.arr.modify(|_, w| unsafe { w.arr().bits(START_TIME) });
-            } else {
-                tim11
-                    .arr
-                    .modify(|_, w| unsafe { w.arr().bits(CONTICUE_TIME) });
-            }
+            print_led!(led, "{}\n", "CDE");
 
-            // 漢字の表示位置算出と描画
-            matrix.clear();
-            let char_start = start_point / 8;
-            let char_end = if (start_point % 8) == 0 {
-                char_start + 3
-            } else {
-                char_start + 4
-            };
-            let char_end = core::cmp::min(char_end, char_count);
-            let mut disp_xpos: i32 = -((start_point % 8) as i32);
-            for i in char_start..char_end + 1 {
-                // 各漢字の表示
-                let font = FONT88.get_char(chars[i * 2], chars[i * 2 + 1]);
-                matrix.draw_bitmap(disp_xpos, 0, 8, font);
-                disp_xpos += 8;
-            }
-            matrix.flash_led(); // LED表示の更新
-            start_point += 1;
-
-            if start_point > 8 * char_count - 32 {
-                start_point = 0;
-            }
             free(|cs| WAKE_TIMER.reset(cs));
         }
 
