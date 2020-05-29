@@ -43,7 +43,7 @@ fn main() -> ! {
     loop {
         // タイマー割込み確認
         if free(|cs| WAKE_TIMER.get(cs)) {
-            print_led!(led, "{}\n", "CDE");
+            print_led!(led, "{}\n", "EFG");
 
             free(|cs| WAKE_TIMER.reset(cs));
         }

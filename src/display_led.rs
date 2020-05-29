@@ -37,7 +37,7 @@ impl fmt::Write for DisplayLed<'_> {
         };
         let font = FONT48.get_char(c1 as u8);
         self.led.draw_bitmap(0, 0, 4, font);
-        self.led.flash_led();
+        while let Err(_) = self.led.flash_led() {}
 
         Ok(())
     }

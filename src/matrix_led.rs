@@ -1,8 +1,12 @@
 //! matrix_ledの制御
 //!  ledサイズ　32*8
 
+use core::cell::RefCell;
+use cortex_m::interrupt::{free, Mutex};
 use stm32f4::stm32f401;
 use stm32f4::stm32f401::interrupt;
+
+type Result<T> = core::result::Result<T, &'static str>;
 
 /// Matrix Ledの制御
 pub struct Matrix<'a> {
@@ -58,12 +62,32 @@ impl<'a> Matrix<'a> {
     }
 
     /// Matrix LEDにvideo_ramの内容を表示する。
-    pub fn flash_led(&self) {
-        while let Err(_) = DMA_BUFF.clear_buff(self.device) {}
+    pub fn flash_led(&self) -> Result<()> {
+        // Martix LEDへの転送中判定　及び　転送中フラグセット
+        // このフラグは、DMA2_STREAM3割込み関数にてリセットされる。
+        let is_busy = free(|cs| {
+            let mut flag = DMA_BUSY.borrow(cs).borrow_mut();
+            let ret = *flag;
+            if !*flag {
+                *flag = true;
+            }
+            ret
+        });
+        if is_busy {
+            return Err("busy");
+        }
+
+        if let Err(_) = DMA_BUFF.clear_buff(self.device) {
+            //flash_ledの呼び出しが早すぎるとDMAが復帰していない可能性
+            free(|cs| *DMA_BUSY.borrow(cs).borrow_mut() = false);
+            return Err("DMA busy");
+        }
+
         for x in 0..8 {
             self.send_oneline_mat_led(x);
         }
         self.send_request_to_dma();
+        Ok(())
     }
 
     /// Matrix LED BUFFに一行を送る
@@ -275,6 +299,7 @@ fn DMA2_STREAM3() {
                 //前データの確定終了処理
                 Matrix::spi_disable(&device);
                 ITER.init_first();
+                free(|cs| *DMA_BUSY.borrow(cs).borrow_mut() = false);
             }
         }
     } else {
@@ -287,12 +312,13 @@ fn DMA2_STREAM3() {
     }
 }
 
+/// DMAビジーフラグ
+static DMA_BUSY: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
+
 /// DMAバッファ領域
 /// 　グローバル変数・matrix_ledモジュール以外での操作禁止
 ///   DMA2_S3CR.ENビットが0の時のみ操作可能
 static DMA_BUFF: DmaBuff = DMA_BUFF_INIT;
-
-type Result<T> = core::result::Result<T, &'static str>;
 
 use core::cell::UnsafeCell;
 struct DmaBuff {
