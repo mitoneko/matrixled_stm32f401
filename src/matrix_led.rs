@@ -299,6 +299,7 @@ fn DMA2_STREAM3() {
                 //前データの確定終了処理
                 Matrix::spi_disable(&device);
                 *ITER = None;
+                free(|cs| *DMA_BUSY.borrow(cs).borrow_mut() = false);
             }
         }
     } else {

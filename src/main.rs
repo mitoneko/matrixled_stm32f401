@@ -18,8 +18,7 @@ use matrixled::display_led;
 use matrixled::display_led::DisplayLed;
 use matrixled::print_led;
 
-const START_TIME: u16 = 1500u16;
-const CONTICUE_TIME: u16 = 200u16;
+const WAIT_TIME: u16 = 1000u16;
 
 static WAKE_TIMER: WakeTimer = WAKE_TIMER_INIT;
 
@@ -36,14 +35,19 @@ fn main() -> ! {
     //device.GPIOA.bsrr.write(|w| w.bs0().set());
 
     let tim11 = &device.TIM11;
-    tim11.arr.modify(|_, w| unsafe { w.arr().bits(START_TIME) });
+    tim11.arr.modify(|_, w| unsafe { w.arr().bits(WAIT_TIME) });
     tim11.cr1.modify(|_, w| w.cen().enabled());
     free(|cs| WAKE_TIMER.set(cs));
 
+    let mut count = 0;
     loop {
         // タイマー割込み確認
         if free(|cs| WAKE_TIMER.get(cs)) {
-            print_led!(led, "{}\n", "EFG");
+            count += 1;
+            if count > 10000 {
+                count = 0;
+            }
+            print_led!(led, "{}:{}\n", "EFG", count);
 
             free(|cs| WAKE_TIMER.reset(cs));
         }
