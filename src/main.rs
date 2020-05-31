@@ -39,15 +39,25 @@ fn main() -> ! {
     tim11.cr1.modify(|_, w| w.cen().enabled());
     free(|cs| WAKE_TIMER.set(cs));
 
-    let mut count = 0;
+    let mut hh = 0;
+    let mut mm = 0;
+    let mut ss = 0;
     loop {
         // タイマー割込み確認
         if free(|cs| WAKE_TIMER.get(cs)) {
-            count += 1;
-            if count > 10000 {
-                count = 0;
+            print_led!(led, "{:>02}:{:>02}:{:>02}\n", hh, mm, ss);
+            ss += 1;
+            if ss > 59 {
+                ss = 0;
+                mm += 1;
+                if mm > 59 {
+                    mm = 0;
+                    hh += 1;
+                    if hh > 99 {
+                        hh = 0;
+                    }
+                }
             }
-            print_led!(led, "{}:{}\n", "EFG", count);
 
             free(|cs| WAKE_TIMER.reset(cs));
         }
