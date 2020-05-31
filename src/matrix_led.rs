@@ -397,17 +397,3 @@ impl Iterator for DmaBuffIter {
         DMA_BUFF.get_buff(self.cur_index.unwrap())
     }
 }
-
-impl DmaBuffIter {
-    fn init_first(&mut self) {
-        self.cur_index = None;
-    }
-
-    fn init_second(&mut self) {
-        self.cur_index = None;
-    }
-
-    fn is_first(&self) -> bool {
-        self.cur_index == None
-    }
-}
