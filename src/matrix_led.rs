@@ -267,7 +267,7 @@ impl<'a> Matrix<'a> {
 /// DMA2 Stream3 割込み関数
 #[interrupt]
 fn DMA2_STREAM3() {
-    static mut ITER: DmaBuffIter = DmaBuffIter { cur_index: None };
+    static mut ITER: Option<DmaBuffIter> = None;
 
     let device;
     unsafe {
@@ -276,10 +276,11 @@ fn DMA2_STREAM3() {
     let dma = &device.DMA2;
     if dma.lisr.read().tcif3().is_complete() {
         dma.lifcr.write(|w| w.ctcif3().clear());
-        if let None = ITER.cur_index {
-            ITER.cur_index = Some(0);
+        if let None = ITER {
+            *ITER = Some(DMA_BUFF.iter());
+            ITER.as_mut().unwrap().next();
         }
-        match ITER.next() {
+        match ITER.as_mut().unwrap().next() {
             Some(data) => {
                 //次のデータの準備
                 let adr = data.as_ptr() as u32;
@@ -296,7 +297,7 @@ fn DMA2_STREAM3() {
             None => {
                 //前データの確定終了処理
                 Matrix::spi_disable(&device);
-                *ITER = DmaBuffIter { cur_index: None };
+                *ITER = None;
             }
         }
     } else {
