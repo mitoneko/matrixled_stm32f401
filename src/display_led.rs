@@ -2,7 +2,7 @@
 //! matrix_ledモジュールは、display_ledを経由して使用する。
 
 use super::matrix_led::Matrix;
-use cortex_m;
+//use cortex_m;
 //use cortex_m_semihosting::dbg;
 use stm32f4::stm32f401;
 

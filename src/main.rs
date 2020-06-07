@@ -18,7 +18,7 @@ use matrixled::display_led;
 use matrixled::display_led::DisplayLed;
 use matrixled::print_led;
 
-const WAIT_TIME: u16 = 1000u16;
+const WAIT_TIME: u16 = 1000u16 - 1;
 
 static WAKE_TIMER: WakeTimer = WAKE_TIMER_INIT;
 
