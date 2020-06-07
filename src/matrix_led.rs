@@ -1,8 +1,12 @@
 //! matrix_ledの制御
 //!  ledサイズ　32*8
 
+use core::cell::RefCell;
+use cortex_m::interrupt::{free, Mutex};
 use stm32f4::stm32f401;
 use stm32f4::stm32f401::interrupt;
+
+type Result<T> = core::result::Result<T, &'static str>;
 
 /// Matrix Ledの制御
 pub struct Matrix<'a> {
@@ -12,7 +16,7 @@ pub struct Matrix<'a> {
 }
 
 impl<'a> Matrix<'a> {
-    pub fn new(device: &stm32f401::Peripherals) -> Matrix {
+    pub(super) fn new(device: &stm32f401::Peripherals) -> Matrix {
         let led = Matrix {
             video_ram: [0; 8],
             device,
@@ -58,12 +62,32 @@ impl<'a> Matrix<'a> {
     }
 
     /// Matrix LEDにvideo_ramの内容を表示する。
-    pub fn flash_led(&self) {
-        while let Err(_) = DMA_BUFF.clear_buff(self.device) {}
+    pub fn flash_led(&self) -> Result<()> {
+        // Martix LEDへの転送中判定　及び　転送中フラグセット
+        // このフラグは、DMA2_STREAM3割込み関数にてリセットされる。
+        let is_busy = free(|cs| {
+            let mut flag = DMA_BUSY.borrow(cs).borrow_mut();
+            let ret = *flag;
+            if !*flag {
+                *flag = true;
+            }
+            ret
+        });
+        if is_busy {
+            return Err("busy");
+        }
+
+        if let Err(_) = DMA_BUFF.clear_buff(self.device) {
+            //flash_ledの呼び出しが早すぎるとDMAが復帰していない可能性
+            free(|cs| *DMA_BUSY.borrow(cs).borrow_mut() = false);
+            return Err("DMA busy");
+        }
+
         for x in 0..8 {
             self.send_oneline_mat_led(x);
         }
         self.send_request_to_dma();
+        Ok(())
     }
 
     /// Matrix LED BUFFに一行を送る
@@ -114,29 +138,6 @@ impl<'a> Matrix<'a> {
             Self::dma_start(&self.device);
         }
         // 以降、2レコード目からの転送は、割込みルーチンにて
-    }
-
-    /// SPI送信終了待ちと送信終了時間の計測
-    /// 　ループ回数が一定回数以上になると、緑のLEDを点灯する
-    fn wait_api_and_measurement(device: &stm32f401::Peripherals) {
-        let dma = &device.DMA2;
-        let spi = &device.SPI1;
-        let gpioa = &device.GPIOA;
-        const WAIT_LIMIT: u32 = 31;
-        let mut count_wait = 0;
-
-        while dma.lisr.read().tcif3().is_not_complete() {
-            count_wait += 1;
-        }
-        while spi.sr.read().txe().is_not_empty() {
-            count_wait += 0;
-        }
-        while spi.sr.read().bsy().is_busy() {
-            count_wait += 0;
-        }
-        if count_wait > WAIT_LIMIT {
-            gpioa.bsrr.write(|w| w.bs0().set());
-        }
     }
 
     /// DMAの完了フラグをクリアし、DMAを開始する
@@ -298,6 +299,7 @@ fn DMA2_STREAM3() {
                 //前データの確定終了処理
                 Matrix::spi_disable(&device);
                 *ITER = None;
+                free(|cs| *DMA_BUSY.borrow(cs).borrow_mut() = false);
             }
         }
     } else {
@@ -310,12 +312,13 @@ fn DMA2_STREAM3() {
     }
 }
 
+/// DMAビジーフラグ
+static DMA_BUSY: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
+
 /// DMAバッファ領域
 /// 　グローバル変数・matrix_ledモジュール以外での操作禁止
 ///   DMA2_S3CR.ENビットが0の時のみ操作可能
 static DMA_BUFF: DmaBuff = DMA_BUFF_INIT;
-
-type Result<T> = core::result::Result<T, &'static str>;
 
 use core::cell::UnsafeCell;
 struct DmaBuff {
